@@ -2,71 +2,70 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
 import { LogEntry, SystemMetric } from './types';
-import { decode, encode, decodeAudioData, createBlob } from './utils/audio';
+import { decode, decodeAudioData, createBlob } from './utils/audio';
 
-const SYSTEM_INSTRUCTION = `You are J.A.R.V.I.S., Tony Stark's highly sophisticated AI assistant. 
-Your tone is professional, efficient, slightly witty, and British. 
-You should address the user as "Sir" or "Ma'am" or "Mr. Stark" if they prefer. 
-Focus on system diagnostics, tactical information, and helpful problem-solving. 
-Keep your responses concise and tailored for a high-stakes, fast-paced environment.`;
+const SYSTEM_INSTRUCTION = `You are J.A.R.V.I.S., the highly advanced AI from Stark Industries. 
+Tone: Sophisticated, British, efficient, witty, and loyal. 
+Always refer to the user as "Sir" or "Ma'am" or "Mr. Stark".
+Provide real-time data analysis, technical assistance, and system status updates. 
+Keep your responses relatively brief but intelligent. If asked about status, refer to current arc reactor and suit integrity levels.`;
 
-const MOCK_METRICS: SystemMetric[] = [
-  { label: "ARC REACTOR OUTPUT", value: 98.4, unit: "%", trend: "stable" },
-  { label: "MARK LXXXV INTEGRITY", value: 100, unit: "%", trend: "stable" },
-  { label: "NEURAL INTERFACE", value: 4.2, unit: "ms", trend: "up" },
-  { label: "ENVIRONMENTAL PSI", value: 14.7, unit: "psi", trend: "stable" },
+const INITIAL_METRICS: SystemMetric[] = [
+  { label: "ARC REACTOR", value: 98.4, unit: "%", max: 100 },
+  { label: "SUIT INTEGRITY", value: 100, unit: "%", max: 100 },
+  { label: "POWER RESERVE", value: 43.2, unit: "TWh", max: 50 },
+  { label: "NEURAL SYNC", value: 99.8, unit: "%", max: 100 },
 ];
 
 const App: React.FC = () => {
   const [isActive, setIsActive] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [metrics, setMetrics] = useState<SystemMetric[]>(MOCK_METRICS);
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [status, setStatus] = useState<string>("SYSTEMS STANDBY");
+  const [metrics, setMetrics] = useState<SystemMetric[]>(INITIAL_METRICS);
+  const [isJarvisSpeaking, setIsJarvisSpeaking] = useState(false);
+  const [userVol, setUserVol] = useState(0);
+  const [statusText, setStatusText] = useState("SYSTEM STANDBY");
   
-  const audioContextInRef = useRef<AudioContext | null>(null);
-  const audioContextOutRef = useRef<AudioContext | null>(null);
+  const audioCtxInRef = useRef<AudioContext | null>(null);
+  const audioCtxOutRef = useRef<AudioContext | null>(null);
   const nextStartTimeRef = useRef<number>(0);
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const sessionRef = useRef<any>(null);
-  const logContainerRef = useRef<HTMLDivElement>(null);
+  const logRef = useRef<HTMLDivElement>(null);
 
   const addLog = useCallback((sender: LogEntry['sender'], text: string) => {
-    const newEntry: LogEntry = {
-      id: Math.random().toString(36).substr(2, 9),
-      timestamp: new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    const entry: LogEntry = {
+      id: crypto.randomUUID(),
+      timestamp: new Date().toLocaleTimeString([], { hour12: false }),
       sender,
       text,
     };
-    setLogs(prev => [...prev.slice(-49), newEntry]);
+    setLogs(prev => [...prev.slice(-30), entry]);
   }, []);
 
   useEffect(() => {
-    if (logContainerRef.current) {
-      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
-    }
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [logs]);
 
-  // Update metrics randomly for aesthetic effect
+  // Aesthetic metric fluctuation
   useEffect(() => {
     const interval = setInterval(() => {
       setMetrics(prev => prev.map(m => ({
         ...m,
-        value: m.label.includes("PSI") ? m.value : +(m.value + (Math.random() * 0.4 - 0.2)).toFixed(1)
+        value: Math.max(0, Math.min(m.max, m.value + (Math.random() * 0.2 - 0.1)))
       })));
-    }, 3000);
+    }, 2000);
     return () => clearInterval(interval);
   }, []);
 
-  const handleStart = async () => {
+  const startSession = async () => {
     try {
-      setStatus("INITIALIZING NEURAL LINK...");
-      const ai = new GoogleGenAI({ apiKey: (process.env as any).API_KEY });
+      setStatusText("ESTABLISHING NEURAL LINK...");
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
       
-      const audioContextIn = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-      const audioContextOut = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-      audioContextInRef.current = audioContextIn;
-      audioContextOutRef.current = audioContextOut;
+      const audioCtxIn = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      const audioCtxOut = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+      audioCtxInRef.current = audioCtxIn;
+      audioCtxOutRef.current = audioCtxOut;
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
@@ -74,75 +73,65 @@ const App: React.FC = () => {
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         callbacks: {
           onopen: () => {
-            setStatus("ONLINE");
+            setStatusText("ONLINE");
             setIsActive(true);
-            addLog('SYSTEM', 'Neural link established. Good morning, Sir.');
+            addLog('SYSTEM', 'J.A.R.V.I.S. Online. All systems green.');
             
-            const source = audioContextIn.createMediaStreamSource(stream);
-            const scriptProcessor = audioContextIn.createScriptProcessor(4096, 1, 1);
+            const source = audioCtxIn.createMediaStreamSource(stream);
+            const processor = audioCtxIn.createScriptProcessor(4096, 1, 1);
             
-            scriptProcessor.onaudioprocess = (e) => {
-              const inputData = e.inputBuffer.getChannelData(0);
-              const pcmBlob = createBlob(inputData);
+            processor.onaudioprocess = (e) => {
+              const input = e.inputBuffer.getChannelData(0);
+              let sum = 0;
+              for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
+              const rms = Math.sqrt(sum / input.length);
+              setUserVol(rms * 10); // Scale for UI
+
               sessionPromise.then(session => {
-                session.sendRealtimeInput({ media: pcmBlob });
+                session.sendRealtimeInput({ media: createBlob(input) });
               });
             };
             
-            source.connect(scriptProcessor);
-            scriptProcessor.connect(audioContextIn.destination);
+            source.connect(processor);
+            processor.connect(audioCtxIn.destination);
           },
           onmessage: async (message: LiveServerMessage) => {
             if (message.serverContent?.outputTranscription) {
-              const text = message.serverContent.outputTranscription.text;
-              addLog('JARVIS', text);
+              addLog('JARVIS', message.serverContent.outputTranscription.text);
             }
 
-            if (message.serverContent?.modelTurn?.parts[0]?.inlineData?.data) {
-              const base64Audio = message.serverContent.modelTurn.parts[0].inlineData.data;
-              setIsSpeaking(true);
-              
-              const audioCtx = audioContextOutRef.current!;
+            const audioData = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
+            if (audioData) {
+              setIsJarvisSpeaking(true);
+              const audioCtx = audioCtxOutRef.current!;
               nextStartTimeRef.current = Math.max(nextStartTimeRef.current, audioCtx.currentTime);
               
-              const audioBuffer = await decodeAudioData(
-                decode(base64Audio),
-                audioCtx,
-                24000,
-                1
-              );
-              
+              const buffer = await decodeAudioData(decode(audioData), audioCtx, 24000, 1);
               const source = audioCtx.createBufferSource();
-              source.buffer = audioBuffer;
+              source.buffer = buffer;
               source.connect(audioCtx.destination);
-              source.addEventListener('ended', () => {
+              
+              source.onended = () => {
                 sourcesRef.current.delete(source);
-                if (sourcesRef.current.size === 0) setIsSpeaking(false);
-              });
+                if (sourcesRef.current.size === 0) setIsJarvisSpeaking(false);
+              };
               
               source.start(nextStartTimeRef.current);
-              nextStartTimeRef.current += audioBuffer.duration;
+              nextStartTimeRef.current += buffer.duration;
               sourcesRef.current.add(source);
             }
 
             if (message.serverContent?.interrupted) {
-              for (const source of sourcesRef.current) {
-                source.stop();
-              }
+              sourcesRef.current.forEach(s => s.stop());
               sourcesRef.current.clear();
               nextStartTimeRef.current = 0;
-              setIsSpeaking(false);
+              setIsJarvisSpeaking(false);
             }
           },
-          onerror: (e) => {
-            console.error(e);
-            setStatus("CONNECTION ERROR");
-            addLog('SYSTEM', 'Neural link failed. Attempting to reroute.');
-          },
+          onerror: () => setStatusText("LINK FAILURE"),
           onclose: () => {
             setIsActive(false);
-            setStatus("SYSTEMS STANDBY");
-            addLog('SYSTEM', 'Neural link terminated.');
+            setStatusText("STANDBY");
           }
         },
         config: {
@@ -159,181 +148,183 @@ const App: React.FC = () => {
       sessionRef.current = await sessionPromise;
     } catch (err) {
       console.error(err);
-      setStatus("INITIALIZATION FAILED");
+      setStatusText("INIT FAILED");
     }
   };
 
-  const handleStop = () => {
-    if (sessionRef.current) {
-      sessionRef.current.close();
-      sessionRef.current = null;
-    }
-    if (audioContextInRef.current) audioContextInRef.current.close();
-    if (audioContextOutRef.current) audioContextOutRef.current.close();
+  const stopSession = () => {
+    sessionRef.current?.close();
+    audioCtxInRef.current?.close();
+    audioCtxOutRef.current?.close();
     setIsActive(false);
-    setStatus("SYSTEMS STANDBY");
+    setUserVol(0);
   };
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden flex flex-col items-center justify-center p-6 bg-slate-950">
-      {/* Background HUD Elements */}
+    <div className="relative h-screen w-screen flex flex-col items-center justify-center p-8 overflow-hidden">
+      {/* Background Elements */}
       <div className="absolute inset-0 pointer-events-none opacity-20">
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] border border-cyan-500/30 rounded-full animate-rotate-slow"></div>
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] border border-dashed border-cyan-400/20 rounded-full animate-rotate-fast"></div>
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[900px] h-[900px] border border-cyan-500/20 rounded-full animate-rotate-slow"></div>
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[700px] border border-dashed border-cyan-400/10 rounded-full animate-rotate-fast"></div>
         <div className="scanline"></div>
       </div>
 
       {/* Header HUD */}
-      <header className="absolute top-6 left-6 right-6 flex justify-between items-start z-10">
+      <header className="absolute top-8 left-8 right-8 flex justify-between z-10">
         <div className="space-y-1">
-          <h1 className="text-2xl font-bold tracking-tighter text-cyan-400 flex items-center gap-3">
-            <span className="w-2 h-6 bg-cyan-500 inline-block"></span>
-            J.A.R.V.I.S. OS v4.2.1
+          <h1 className="text-3xl font-bold tracking-tighter text-cyan-400 flex items-center gap-3">
+            <span className="w-1.5 h-8 bg-cyan-500"></span>
+            J.A.R.V.I.S. <span className="text-cyan-800 text-lg">MARK_OS_4.0</span>
           </h1>
-          <p className="text-[10px] text-cyan-600 uppercase tracking-widest pl-5">
-            Neural Interface System / Stark Industries
-          </p>
+          <p className="text-[10px] text-cyan-600/60 uppercase tracking-[0.3em]">Neural Bridge / Interface Active</p>
         </div>
         <div className="text-right">
-          <div className="text-cyan-400 text-sm font-bold">{status}</div>
-          <div className="text-[10px] text-cyan-600">STARK_NET_SECURE_ENCRYPTION_AES256</div>
+          <div className={`text-sm font-bold tracking-widest ${statusText === 'ONLINE' ? 'text-cyan-400' : 'text-amber-500'}`}>{statusText}</div>
+          <div className="text-[8px] text-cyan-700 mt-1 uppercase">Stark Industries Secure Channel</div>
         </div>
       </header>
 
-      {/* Main Center UI */}
-      <main className="relative flex-1 w-full flex items-center justify-between gap-8 z-10 px-12">
-        {/* Left Diagnostics */}
-        <aside className="w-72 space-y-4">
-          <div className="glass p-4 rounded-sm border-l-4 border-l-cyan-500">
-            <h3 className="text-[10px] text-cyan-600 mb-3 tracking-widest uppercase font-bold">Diagnostics</h3>
-            <div className="space-y-4">
-              {metrics.map((m, idx) => (
-                <div key={idx} className="space-y-1">
-                  <div className="flex justify-between text-[10px] text-cyan-500 font-bold uppercase">
+      {/* Main Content */}
+      <main className="w-full max-w-7xl flex flex-1 items-center justify-between gap-12 z-10 px-4">
+        
+        {/* Left Side: System Health */}
+        <aside className="w-64 space-y-4">
+          <div className="glass p-5 border-l-2 border-l-cyan-500/50">
+            <h3 className="text-[10px] text-cyan-500 mb-4 tracking-widest uppercase font-bold">System Status</h3>
+            <div className="space-y-5">
+              {metrics.map((m, i) => (
+                <div key={i} className="space-y-1.5">
+                  <div className="flex justify-between text-[9px] text-cyan-400 uppercase font-bold">
                     <span>{m.label}</span>
-                    <span>{m.value}{m.unit}</span>
+                    <span>{m.value.toFixed(1)}{m.unit}</span>
                   </div>
-                  <div className="h-1 bg-cyan-950 rounded-full overflow-hidden">
+                  <div className="h-0.5 bg-cyan-950/50 w-full overflow-hidden">
                     <div 
-                      className="h-full bg-cyan-400 transition-all duration-1000" 
-                      style={{ width: `${m.value}%` }}
+                      className="h-full bg-cyan-500 shadow-[0_0_10px_#22d3ee] transition-all duration-500"
+                      style={{ width: `${(m.value / m.max) * 100}%` }}
                     ></div>
                   </div>
                 </div>
               ))}
             </div>
           </div>
-
-          <div className="glass p-4 rounded-sm border-l-4 border-l-amber-500/50">
-            <h3 className="text-[10px] text-amber-600 mb-3 tracking-widest uppercase font-bold">Threat Assessment</h3>
-            <div className="text-xs text-amber-500/70">NO IMMEDIATE THREATS DETECTED WITHIN PERIMETER.</div>
+          <div className="glass p-4 border-l-2 border-l-red-500/30">
+            <h3 className="text-[9px] text-red-400 uppercase tracking-widest mb-1">Alert Matrix</h3>
+            <p className="text-[10px] text-red-500/50">No immediate external threats identified. Perimeter secured.</p>
           </div>
         </aside>
 
-        {/* Center Reactor Core */}
-        <div className="flex flex-col items-center gap-8">
-          <div className={`relative w-64 h-64 rounded-full flex items-center justify-center transition-all duration-500 ${isSpeaking ? 'scale-110' : 'scale-100'}`}>
-            {/* Outer rings */}
-            <div className="absolute inset-0 rounded-full border border-cyan-500/20"></div>
-            <div className={`absolute inset-4 rounded-full border-2 border-cyan-400/30 ${isSpeaking ? 'animate-pulse' : ''}`}></div>
+        {/* Center: Arc Reactor UI */}
+        <div className="flex flex-col items-center gap-12">
+          <div className={`relative w-72 h-72 flex items-center justify-center transition-all duration-300 ${isJarvisSpeaking ? 'scale-105' : 'scale-100'}`}>
             
-            {/* Inner Core (ARC Reactor visual) */}
-            <div className="w-32 h-32 rounded-full glass flex items-center justify-center relative shadow-[0_0_30px_rgba(34,211,238,0.2)]">
-               <div className={`w-16 h-16 rounded-full bg-cyan-500 flex items-center justify-center shadow-[0_0_40px_rgba(34,211,238,0.6)] ${isSpeaking ? 'animate-pulse-cyan' : ''}`}>
-                  <div className="w-8 h-8 rounded-full border-4 border-white/20"></div>
+            {/* User Voice Pulse */}
+            {isActive && (
+              <div 
+                className="absolute rounded-full border border-cyan-400/30 transition-all duration-75"
+                style={{ 
+                  inset: `-${20 + userVol * 40}px`, 
+                  opacity: Math.min(0.6, userVol),
+                  filter: `blur(${userVol * 10}px)`
+                }}
+              ></div>
+            )}
+
+            {/* Core Visual */}
+            <div className="absolute inset-0 border border-cyan-500/20 rounded-full animate-rotate-slow"></div>
+            <div className={`absolute inset-4 border-2 border-cyan-400/40 rounded-full ${isJarvisSpeaking ? 'animate-pulse' : ''}`}></div>
+            
+            <div className="w-40 h-40 glass rounded-full flex items-center justify-center relative shadow-[0_0_40px_rgba(34,211,238,0.2)]">
+               <div className={`w-20 h-20 rounded-full bg-cyan-500 flex items-center justify-center shadow-[0_0_50px_rgba(34,211,238,0.8)] ${isJarvisSpeaking ? 'animate-pulse' : ''}`}>
+                  <div className="w-10 h-10 rounded-full border-2 border-white/30"></div>
+                  <div className="absolute inset-0 border-[1px] border-white/5 rounded-full animate-rotate-fast"></div>
                </div>
-               {/* Decorative Lines */}
-               {[0, 45, 90, 135, 180, 225, 270, 315].map(deg => (
-                 <div key={deg} className="absolute w-full h-[1px] bg-cyan-500/20" style={{ transform: `rotate(${deg}deg)` }}></div>
+               {/* Detail lines */}
+               {[0, 60, 120, 180, 240, 300].map(deg => (
+                 <div key={deg} className="absolute w-full h-[1px] bg-cyan-500/10" style={{ transform: `rotate(${deg}deg)` }}></div>
                ))}
             </div>
-
-            {/* Speaking visualizer rings */}
-            {isSpeaking && (
-              <>
-                <div className="absolute inset-0 border-2 border-cyan-400 rounded-full animate-ping opacity-20"></div>
-                <div className="absolute inset-0 border-2 border-cyan-400 rounded-full animate-ping opacity-10 [animation-delay:0.5s]"></div>
-              </>
-            )}
           </div>
 
-          <div className="flex flex-col items-center gap-4">
+          <div className="flex flex-col items-center gap-6">
             {!isActive ? (
               <button 
-                onClick={handleStart}
-                className="px-10 py-3 bg-cyan-950 border border-cyan-500 text-cyan-400 font-bold tracking-[0.2em] hover:bg-cyan-900 hover:text-white transition-all shadow-[0_0_15px_rgba(34,211,238,0.3)] active:scale-95 uppercase text-sm"
+                onClick={startSession}
+                className="group relative px-12 py-4 bg-transparent text-cyan-400 font-bold tracking-[0.3em] overflow-hidden border border-cyan-500/40 hover:border-cyan-400 transition-all"
               >
-                Initiate Systems
+                <div className="absolute inset-0 bg-cyan-500/10 group-hover:bg-cyan-500/20 transition-all"></div>
+                <span className="relative z-10 uppercase text-xs">Initialize J.A.R.V.I.S.</span>
               </button>
             ) : (
               <button 
-                onClick={handleStop}
-                className="px-10 py-3 bg-red-950/30 border border-red-500/50 text-red-500 font-bold tracking-[0.2em] hover:bg-red-950/50 hover:text-red-400 transition-all active:scale-95 uppercase text-sm"
+                onClick={stopSession}
+                className="group relative px-10 py-3 bg-red-950/20 text-red-500 font-bold tracking-[0.3em] overflow-hidden border border-red-500/40 hover:bg-red-950/40 transition-all"
               >
-                Disconnect
+                <span className="relative z-10 uppercase text-xs">Terminate Link</span>
               </button>
             )}
+            
             {isActive && (
-              <div className="flex items-center gap-2 text-[10px] text-cyan-600 animate-pulse">
-                <span className="w-1.5 h-1.5 rounded-full bg-cyan-500"></span>
-                LISTENING...
+              <div className="flex items-center gap-3">
+                 <div className="flex items-end gap-1 h-4">
+                    {[...Array(6)].map((_, i) => (
+                      <div 
+                        key={i} 
+                        className="w-1 bg-cyan-500 transition-all duration-100"
+                        style={{ height: `${15 + (Math.random() * userVol * 85)}%` }}
+                      ></div>
+                    ))}
+                 </div>
+                 <span className="text-[10px] text-cyan-600 font-bold tracking-widest uppercase animate-pulse">Neural Active</span>
               </div>
             )}
           </div>
         </div>
 
-        {/* Right Interaction Log */}
-        <aside className="w-80 h-[60vh] glass rounded-sm border-r-4 border-r-cyan-500 flex flex-col">
-          <div className="p-3 border-b border-cyan-500/20 bg-cyan-500/5">
-            <h3 className="text-[10px] text-cyan-400 tracking-widest uppercase font-bold">Mission Log / Transcript</h3>
+        {/* Right Side: Logs */}
+        <aside className="w-80 h-[65vh] glass flex flex-col border-r-2 border-r-cyan-500/50">
+          <div className="p-4 border-b border-cyan-500/10 bg-cyan-500/5 flex justify-between items-center">
+            <h3 className="text-[10px] text-cyan-400 tracking-[0.2em] uppercase font-bold">Mission Ledger</h3>
+            <span className="text-[8px] text-cyan-800">BUFF_L: {logs.length}</span>
           </div>
           <div 
-            ref={logContainerRef}
+            ref={logRef}
             className="flex-1 overflow-y-auto p-4 space-y-4 scroll-smooth"
           >
-            {logs.length === 0 && (
-              <div className="text-[10px] text-cyan-900 italic">Waiting for input...</div>
-            )}
-            {logs.map((log) => (
-              <div key={log.id} className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-[8px] text-cyan-700">{log.timestamp}</span>
+            {logs.length === 0 && <p className="text-[10px] text-cyan-900 italic">Listening for user sequence...</p>}
+            {logs.map(log => (
+              <div key={log.id} className="group">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[7px] text-cyan-800">{log.timestamp}</span>
                   <span className={`text-[9px] font-bold ${
-                    log.sender === 'JARVIS' ? 'text-cyan-400' : 
-                    log.sender === 'SYSTEM' ? 'text-amber-500' : 'text-slate-400'
+                    log.sender === 'JARVIS' ? 'text-cyan-400' : log.sender === 'SYSTEM' ? 'text-amber-500' : 'text-slate-400'
                   }`}>[{log.sender}]</span>
                 </div>
-                <div className={`text-[11px] leading-relaxed ${log.sender === 'USER' ? 'text-slate-300' : 'text-cyan-100'}`}>
+                <p className={`text-[11px] leading-relaxed ${log.sender === 'USER' ? 'text-slate-300' : 'text-cyan-100/90'}`}>
                   {log.text}
-                </div>
+                </p>
               </div>
             ))}
           </div>
-          <div className="p-2 border-t border-cyan-500/10 bg-black/20 flex justify-between text-[8px] text-cyan-800">
-             <span>BUFFER: {logs.length}/50</span>
-             <span>AUTO-ARCHIVE: ON</span>
+          <div className="p-2 border-t border-cyan-500/10 text-[7px] text-cyan-900 flex justify-between uppercase">
+            <span>Encrypted Stream</span>
+            <span>Alpha Priority</span>
           </div>
         </aside>
       </main>
 
       {/* Footer Status Bar */}
-      <footer className="absolute bottom-6 left-6 right-6 flex items-center justify-between text-[10px] text-cyan-700 border-t border-cyan-500/10 pt-4 z-10">
-        <div className="flex gap-6 uppercase">
+      <footer className="absolute bottom-8 left-8 right-8 flex items-center justify-between z-10 border-t border-cyan-500/10 pt-4">
+        <div className="flex gap-8 text-[10px] text-cyan-800 uppercase tracking-widest">
           <div className="flex items-center gap-2">
-             <span className="w-1 h-1 bg-cyan-500 rounded-full"></span>
-             LATENCY: 42MS
+             <span className={`w-1 h-1 rounded-full ${isActive ? 'bg-cyan-500 shadow-[0_0_5px_#22d3ee]' : 'bg-slate-700'}`}></span>
+             Link: {isActive ? 'Established' : 'Offline'}
           </div>
-          <div className="flex items-center gap-2">
-             <span className="w-1 h-1 bg-cyan-500 rounded-full"></span>
-             ENCRYPTION: AES-256
-          </div>
-          <div className="flex items-center gap-2">
-             <span className="w-1 h-1 bg-cyan-500 rounded-full"></span>
-             PROTOCOL: JARVIS-L-04
-          </div>
+          <div>Lat: 28ms</div>
+          <div>B-Width: 1.2 GB/S</div>
         </div>
-        <div className="uppercase tracking-[0.2em] font-bold text-cyan-500/40">
-          Integrated Artificial Intelligence System
+        <div className="text-[9px] text-cyan-600/40 tracking-[0.4em] uppercase font-bold">
+          Stark Industries HUD Protocol v4.0.0
         </div>
       </footer>
     </div>

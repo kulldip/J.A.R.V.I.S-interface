@@ -48,14 +48,3 @@ export function createBlob(data: Float32Array): { data: string; mimeType: string
     mimeType: 'audio/pcm;rate=16000',
   };
 }
-
-export function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, _) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const base64String = (reader.result as string).split(',')[1];
-      resolve(base64String);
-    };
-    reader.readAsDataURL(blob);
-  });
-}

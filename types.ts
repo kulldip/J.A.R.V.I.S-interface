@@ -10,5 +10,5 @@ export interface SystemMetric {
   label: string;
   value: number;
   unit: string;
-  trend: 'up' | 'down' | 'stable';
+  max: number;
 }
